@@ -17,8 +17,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - run: cargo doc --no-deps
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --features parallel
+      - run: cargo test --all-features --test gpu   # skips without a GPU adapter
+      - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings

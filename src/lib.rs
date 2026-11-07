@@ -8,6 +8,9 @@
 //! spreading blots with feathery streaks, light fringes, branching around sizing, rough toes along
 //! the edge of concentrated ink, and dark rims.
 //!
+//! The `wgpu` feature adds [`gpu`]: the same simulation as compute shaders, about 25 times faster.
+//! The README maps each part of the paper to the code and lists where this departs from it.
+//!
 //! Put ink down with [`Ink::deposit`] and a [`footprint`], run [`Ink::step`] until it dries, and
 //! turn it into colours with [`render()`] or the sharper, upscaled [`render_trimmed`].
 //!
@@ -45,3 +48,7 @@ pub use render::{Palette, Trim, render, render_trimmed, to_srgb8};
 
 /// The crate version, for caches keyed on the simulator's behaviour.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

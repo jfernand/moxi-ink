@@ -9,7 +9,7 @@
 //! the edge of concentrated ink, and dark rims.
 //!
 //! Put ink down with [`Ink::deposit`] and a [`footprint`], run [`Ink::step`] until it dries, and
-//! turn it into colours with [`render`] or the sharper, upscaled [`render_trimmed`].
+//! turn it into colours with [`render()`] or the sharper, upscaled [`render_trimmed`].
 //!
 //! ```
 //! use moxi_ink::{Ink, Load, Palette, Paper, Params, footprint, render};
@@ -30,6 +30,8 @@
 #![warn(missing_docs)]
 
 pub mod footprint;
+#[cfg(feature = "wgpu")]
+pub mod gpu;
 pub mod ink;
 pub mod paper;
 pub mod params;

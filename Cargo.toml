@@ -30,3 +30,7 @@ png = "0.18"
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[example]]
+name = "gpu"
+required-features = ["wgpu"]

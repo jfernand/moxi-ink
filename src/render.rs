@@ -61,33 +61,50 @@ impl Default for Trim {
 /// interpolated pixels that fall outside the stained area trimmed back to paper (equation 11).
 pub fn render_trimmed(ink: &Ink, palette: &Palette, trim: Trim) -> Vec<[f32; 3]> {
     let (w, h, s) = (ink.width, ink.height, trim.scale.max(1));
+    let amounts = visible_trimmed(ink, trim);
+    let mut out = Vec::with_capacity(amounts.len());
+    for py in 0..h * s {
+        for px in 0..w * s {
+            let (x, y) = ((px as f32 + 0.5) / s as f32, (py as f32 + 0.5) / s as f32);
+            let grain = bilinear(&ink.paper.grain, w, h, x, y);
+            out.push(palette.colour(amounts[py * w * s + px], grain));
+        }
+    }
+    out
+}
+
+/// The visible ink amounts (as [`Ink::visible_ink`]) upscaled by `trim.scale`, with the same
+/// trimming as [`render_trimmed`]: zero where a pixel falls outside the stained area. For baking
+/// textures at a higher resolution than the simulation, to colour later (in a shader, say).
+pub fn visible_trimmed(ink: &Ink, trim: Trim) -> Vec<[f32; 4]> {
+    let (w, h, s) = (ink.width, ink.height, trim.scale.max(1));
     let visible = ink.visible_ink();
     // φ per site: positive where ink has been, negative where it never reached, so the trimmed
     // edge runs between the last stained site and the paper beyond it. Stained sites are kept
     // whole, so a dark rim in the outermost ring survives the trimming.
     let stained = |c: usize| ink.stain[c] > 0.0;
     let phi: Vec<f32> = (0..w * h).map(|c| if stained(c) { 0.2 + 0.2 * ink.stain[c].min(1.0) } else { -0.2 }).collect();
-    let sample = |field: &dyn Fn(usize) -> f32, x: f32, y: f32| {
-        let (x, y) = ((x - 0.5).clamp(0.0, (w - 1) as f32), (y - 0.5).clamp(0.0, (h - 1) as f32));
-        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
-        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
-        let top = lerp(field(y0 * w + x0), field(y0 * w + x1), fx);
-        let bottom = lerp(field(y1 * w + x0), field(y1 * w + x1), fx);
-        lerp(top, bottom, fy)
-    };
     let mut out = Vec::with_capacity(w * h * s * s);
     for py in 0..h * s {
         for px in 0..w * s {
             let (x, y) = ((px as f32 + 0.5) / s as f32, (py as f32 + 0.5) / s as f32);
-            let grain = sample(&|c| ink.paper.grain[c], x, y);
-            let r = sample(&|c| ink.paper.rougher[c], x, y);
-            let edge = sample(&|c| phi[c], x, y) + trim.roughness * (r + trim.bias);
-            let v = if edge < 0.0 { [0.0; 4] } else { sample_stained(&visible, &|c| stained(c), w, h, x, y) };
-            out.push(palette.colour(v, grain));
+            let r = bilinear(&ink.paper.rougher, w, h, x, y);
+            let edge = bilinear(&phi, w, h, x, y) + trim.roughness * (r + trim.bias);
+            out.push(if edge < 0.0 { [0.0; 4] } else { sample_stained(&visible, &|c| stained(c), w, h, x, y) });
         }
     }
     out
+}
+
+/// Bilinear interpolation of `field` at `(x, y)`, in site units with centres at `+0.5`.
+fn bilinear(field: &[f32], w: usize, h: usize, x: f32, y: f32) -> f32 {
+    let (x, y) = ((x - 0.5).clamp(0.0, (w - 1) as f32), (y - 0.5).clamp(0.0, (h - 1) as f32));
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let top = lerp(field[y0 * w + x0], field[y0 * w + x1], fx);
+    let bottom = lerp(field[y1 * w + x0], field[y1 * w + x1], fx);
+    lerp(top, bottom, fy)
 }
 
 /// Bilinear interpolation of `ink` at `(x, y)` (site units, centres at `+0.5`), over the stained
@@ -117,4 +134,29 @@ pub fn to_srgb8(linear: f32) -> u8 {
     let c = linear.clamp(0.0, 1.0);
     let v = if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * libm::powf(c, 1.0 / 2.4) - 0.055 };
     (v * 255.0).round() as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Load, Paper, Params, footprint};
+
+    #[test]
+    fn trimmed_amounts_match_the_ink() {
+        let n = 32;
+        let mut ink = Ink::new(Paper::generate(n, n, 3), Params::default());
+        ink.deposit(&footprint::disc(n, n, (16.0, 16.0), 5.0, 1.0), Load::ink(3.0, 0.5));
+        for _ in 0..50 {
+            ink.step();
+        }
+        let trim = Trim { scale: 2, ..Trim::default() };
+        let up = visible_trimmed(&ink, trim);
+        assert_eq!(up.len(), 4 * n * n);
+        // Inside the stain the upscaled ink is close to the site's; far outside it is zero.
+        let site = ink.visible_ink()[16 * n + 16][0];
+        assert!((up[33 * 2 * n + 33][0] - site).abs() < 0.2 * site.max(0.01), "{} vs {site}", up[33 * 2 * n + 33][0]);
+        assert_eq!(up[0], [0.0; 4]);
+        let colours = render_trimmed(&ink, &Palette::default(), trim);
+        assert_eq!(colours.len(), up.len());
+    }
 }

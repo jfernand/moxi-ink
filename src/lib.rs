@@ -44,7 +44,7 @@ pub mod rng;
 pub use ink::{Ink, Load};
 pub use paper::Paper;
 pub use params::Params;
-pub use render::{Palette, Trim, render, render_trimmed, to_srgb8};
+pub use render::{Palette, Trim, render, render_trimmed, to_srgb8, visible_trimmed};
 
 /// The crate version, for caches keyed on the simulator's behaviour.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

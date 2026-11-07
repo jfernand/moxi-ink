@@ -1,0 +1,32 @@
+[package]
+name = "moxi-ink"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Eastern ink dispersing through absorbent paper, after Chu and Tai, MoXi: Real-Time Ink Dispersion in Absorbent Paper (SIGGRAPH 2005): a lattice-Boltzmann simulation on the CPU or, with the `wgpu` feature, the GPU"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jfernand/moxi-ink"
+readme = "README.md"
+keywords = ["ink", "painting", "simulation", "lattice-boltzmann", "npr"]
+categories = ["graphics", "simulation", "rendering"]
+include = ["src/**", "shaders/**", "examples/**", "README.md", "LICENSE-*"]
+
+[features]
+default = []
+## Run the CPU passes row-parallel with rayon (same results as single-threaded).
+parallel = ["dep:rayon"]
+## The same simulation as WGSL compute shaders on any wgpu device.
+wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+
+[dependencies]
+libm = "0.2"
+rayon = { version = "1.10", optional = true }
+wgpu = { version = "29", optional = true }
+bytemuck = { version = "1.16", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+png = "0.18"
+
+[package.metadata.docs.rs]
+all-features = true

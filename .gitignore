@@ -1,0 +1,6 @@
+/target
+/out
+/Cargo.lock
+# Local copies of papers and reference code: keep them out of the repository.
+/docs/
+/.idea/

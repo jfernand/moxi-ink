@@ -9,7 +9,7 @@ repository = "https://github.com/jfernand/moxi-ink"
 readme = "README.md"
 keywords = ["ink", "painting", "simulation", "lattice-boltzmann", "npr"]
 categories = ["graphics", "simulation", "rendering"]
-include = ["src/**", "shaders/**", "examples/**", "README.md", "LICENSE-*"]
+include = ["src/**", "shaders/**", "examples/**", "tests/**", "README.md", "LICENSE-*"]
 
 [features]
 default = []

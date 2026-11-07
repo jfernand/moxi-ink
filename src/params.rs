@@ -56,11 +56,16 @@ pub struct Params {
     /// m: the least a deposit is scaled by, however wet the paper. Paper: 0.1.
     pub base_mask: f32,
 
-    /// γ: how much the paper holds pigment back when the water moves (0 lets the pigment travel
-    /// with the water, 1 holds it in place). *Tuned.*
+    /// γ: the share of its ink that fast-moving water leaves behind in the paper (0 lets the ink
+    /// travel with the water, 1 holds it in place). Slower water leaves more, up to
+    /// [`Params::hindrance_still`]; this is what draws the ink into streaks. *Tuned.*
     pub hindrance: f32,
-    /// ς: water speed below which pigment stays put. *Tuned.*
+    /// ς: water speed above which the paper holds back only γ. *Tuned.*
     pub hindrance_speed: f32,
+    /// The share held back in still water (the paper's formula uses 1). Below 1, ink is not
+    /// trapped where the water drains without a net flow, such as under the middle of a dab.
+    /// *Tuned.*
+    pub hindrance_still: f32,
     /// η: the least fraction of pigment fixed into the paper each step. *Tuned.*
     pub fix_base: f32,
     /// µ: water level below which drying fixes pigment fully. *Tuned.*
@@ -74,25 +79,26 @@ impl Default for Params {
         Self {
             omega: 0.5,
             advection: 0.3,
-            evaporation: 0.0008,
-            edge_evaporation: 5e-5,
+            evaporation: 0.0002,
+            edge_evaporation: 2e-4,
             block_base: 0.05,
-            block_grain: 0.35,
+            block_grain: 0.85,
             block_alum: 0.6,
             block_glue: 1.0,
             block_fixed: 0.1,
             pin_base: 0.1,
             pin_fixed: 0.1,
-            pin_disorder: 0.15,
+            pin_disorder: 0.4,
             toe_glue: 0.3,
             pin_diagonal: 1.0,
             capacity: 1.0,
             surface_capacity: 5.0,
             receptivity: 0.6,
             base_mask: 0.1,
-            hindrance: 0.2,
-            hindrance_speed: 0.02,
-            fix_base: 0.002,
+            hindrance: 0.3,
+            hindrance_speed: 0.002,
+            hindrance_still: 0.85,
+            fix_base: 0.0001,
             fix_dryness: 0.15,
             fix_glue: 0.5,
         }

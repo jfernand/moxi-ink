@@ -105,6 +105,10 @@ pub struct Ink {
     pub fixed_ink: Vec<[f32; 4]>,
     scratch_f: Vec<[f32; 9]>,
     scratch_ink: Vec<[f32; 4]>,
+    /// γ* per site for the current step.
+    held: Vec<f32>,
+    /// Sites whose last trace of water was dropped this step.
+    dried: Vec<usize>,
 }
 
 impl Ink {
@@ -130,6 +134,8 @@ impl Ink {
             fixed_ink: vec![[0.0; 4]; n],
             scratch_f: vec![[0.0; 9]; n],
             scratch_ink: vec![[0.0; 4]; n],
+            held: vec![0.0; n],
+            dried: Vec::new(),
         }
     }
 
@@ -235,7 +241,7 @@ impl Ink {
             let (grain, glue) = (self.paper.grain[c], self.flow_ink[c][3]);
             let fixed: f32 = self.fixed_ink[c].iter().sum();
             let kappa = (p.block_base
-                + p.block_grain * grain
+                + p.block_grain * (1.0 - grain)
                 + p.block_alum * self.paper.alum[c]
                 + p.block_glue * glue
                 + p.block_fixed * fixed)
@@ -251,7 +257,7 @@ impl Ink {
                 .fold(0.0f32, f32::max);
             let toes = smoothstep(0.0, p.toe_glue, wettest_glue);
             let disorder = lerp(grain, self.paper.pinning[c], toes);
-            let sigma = p.pin_base + p.pin_fixed * fixed + p.pin_disorder * disorder;
+            let sigma = p.pin_base + p.pin_fixed * fixed + p.pin_disorder * (1.0 - disorder);
             let pinned = DIRECTIONS[1..].iter().enumerate().all(|(i, &d)| {
                 let threshold = if i < 4 { sigma } else { sigma * p.pin_diagonal };
                 self.neighbour(c, d).is_none_or(|n| self.water[n] < threshold)
@@ -313,9 +319,11 @@ impl Ink {
     /// surface water seeping in as far as the fibres' capacity π allows (§5.2).
     fn gather_water(&mut self) {
         let p = self.params;
+        self.dried.clear();
         for c in 0..self.water.len() {
             let f = &mut self.f[c];
             let mut rho: f32 = f.iter().sum();
+            let arrived = rho > 0.0;
             if rho > 0.0 && p.evaporation > 0.0 {
                 let kept = (rho - p.evaporation).max(0.0) / rho;
                 f.iter_mut().for_each(|x| *x *= kept);
@@ -324,6 +332,9 @@ impl Ink {
             if rho < DRY {
                 *f = [0.0; 9];
                 rho = 0.0;
+                if arrived {
+                    self.dried.push(c);
+                }
             }
             let mut u = [0.0f32; 2];
             for i in 1..9 {
@@ -331,11 +342,9 @@ impl Ink {
                 u[1] += DIRECTIONS[i][1] as f32 * f[i];
             }
             let seep = self.surface_water[c].clamp(0.0, (p.capacity - rho).max(0.0));
-            self.surface_water[c] -= seep;
-            if self.surface_water[c] <= 0.0 {
-                self.surface_water[c] = 0.0;
-                self.surface_ink[c] = [0.0; 4];
-            }
+            // The surface ink's concentration stays as it is: it only counts in proportion to
+            // the surface water, and the seeping water takes its share in `move_ink`.
+            self.surface_water[c] = (self.surface_water[c] - seep).max(0.0);
             f[0] += seep;
             rho += seep;
             self.seep[c] = seep;
@@ -346,7 +355,8 @@ impl Ink {
     }
 
     /// Pass 5 (§5.4.3): ink settles into the fixture layer, one way, faster as the water dries
-    /// and where there is more glue; all of it once the site is dry.
+    /// and where there is more glue; all of it once the site is dry. The ink is taken from the
+    /// water the site held before this step, before that water moves on.
     fn fix_ink(&mut self) {
         let p = self.params;
         for c in 0..self.water.len() {
@@ -360,20 +370,23 @@ impl Ink {
             let fix =
                 if now <= 0.0 { 1.0 } else { (lost * (1.0 - smoothstep(0.0, dryness, now))).max(p.fix_base).min(1.0) };
             for k in 0..4 {
-                let amount = self.flow_ink[c][k] * before;
-                let moved = fix * amount;
-                self.fixed_ink[c][k] += moved;
-                self.flow_ink[c][k] = if now > 0.0 { (amount - moved) / now } else { 0.0 };
+                self.fixed_ink[c][k] += fix * self.flow_ink[c][k] * before;
+                self.flow_ink[c][k] *= 1.0 - fix;
             }
         }
     }
 
-    /// Pass 6 (§5.4.1, §5.4.2): ink moves with the water. Sites wetted this step take the ink
-    /// their incoming particles carried (equation 10); wet sites trace the velocity back. The
-    /// paper holds some of it back (hindrance), and ink seeping from the surface mixes in.
+    /// Pass 6 (§5.4.1, §5.4.2): ink moves with the water. Every site takes the ink its arriving
+    /// particles carried, from the site each came from or, where it bounced back, from itself
+    /// (the paper's equation 10, which it uses only for newly wet sites; here it is used
+    /// everywhere, which keeps the ink with the water). The paper holds some ink back
+    /// (hindrance): water leaving a site leaves a share γ* of its ink behind, most of all where
+    /// the water is slow. Ink is conserved exactly. Ink seeping from the surface mixes in last.
     fn move_ink(&mut self) {
+        let mut held = std::mem::take(&mut self.held);
+        fill(&mut held, |c| self.held(c));
+        self.held = held;
         let mut out = std::mem::take(&mut self.scratch_ink);
-        let p = self.params;
         fill(&mut out, |c| {
             let water = self.water[c];
             if water <= 0.0 {
@@ -381,69 +394,65 @@ impl Ink {
             }
             let seep = self.seep[c];
             let flowing = water - seep;
-            let old = self.flow_ink[c];
-            let mut ink = [0.0f32; 4];
-            if flowing > 0.0 {
-                let carried =
-                    if self.last_water[c] <= 0.0 { self.fill_from_neighbours(c, flowing) } else { self.trace_back(c) };
-                let u = self.velocity[c];
-                let speed = (u[0] * u[0] + u[1] * u[1]).sqrt();
-                let held = lerp(1.0, p.hindrance, smoothstep(0.0, p.hindrance_speed, speed));
-                for k in 0..4 {
-                    ink[k] = lerp(carried[k], old[k], held);
-                }
-            }
-            let surface = self.surface_ink[c];
+            let mut ink = if flowing > 0.0 { self.carried(c).map(|x| x / flowing) } else { [0.0; 4] };
             if seep > 0.0 {
+                let surface = self.surface_ink[c];
                 for k in 0..4 {
                     ink[k] = (ink[k] * flowing.max(0.0) + surface[k] * seep) / water;
                 }
             }
             ink
         });
+        // Ink brought by water that then dried away entirely stays in the paper.
+        for k in 0..self.dried.len() {
+            let c = self.dried[k];
+            let ink = self.carried(c);
+            for (fixed, x) in self.fixed_ink[c].iter_mut().zip(ink) {
+                *fixed += x;
+            }
+        }
         self.scratch_ink = std::mem::replace(&mut self.flow_ink, out);
     }
 
-    /// Equation 10: the ink each arriving particle brought from the site behind it.
-    #[allow(clippy::needless_range_loop)]
-    fn fill_from_neighbours(&self, c: usize, water: f32) -> [f32; 4] {
-        let mut ink = [0.0f32; 4];
-        for i in 1..9 {
-            if let Some(s) = self.neighbour(c, [-DIRECTIONS[i][0], -DIRECTIONS[i][1]]) {
-                for (k, x) in ink.iter_mut().enumerate() {
-                    *x += self.f[c][i] * self.flow_ink[s][k];
-                }
-            }
-        }
-        ink.map(|x| x / water)
+    /// γ*: the share of its ink that water leaving site `c` leaves behind.
+    fn held(&self, c: usize) -> f32 {
+        let u = self.velocity[c];
+        let speed = (u[0] * u[0] + u[1] * u[1]).sqrt();
+        lerp(self.params.hindrance_still, self.params.hindrance, smoothstep(0.0, self.params.hindrance_speed, speed))
     }
 
-    /// The method of characteristics: the ink at `x − u`, interpolated, unless the interpolation
-    /// would reach across the wet area's boundary, in which case the ink stays as it is.
-    fn trace_back(&self, c: usize) -> [f32; 4] {
-        let u = self.velocity[c];
-        let (x, y) = ((c % self.width) as f32 - u[0], (c / self.width) as f32 - u[1]);
-        let (x0, y0) = (x.floor(), y.floor());
-        let (fx, fy) = (x - x0, y - y0);
-        let (x0, y0) = (x0 as i32, y0 as i32);
-        let mut corners = [0usize; 4];
-        for (k, (dx, dy)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
-            let (px, py) = (x0 + dx, y0 + dy);
-            if px < 0 || py < 0 || px as usize >= self.width || py as usize >= self.height {
-                return self.flow_ink[c];
+    /// The ink at `c` after streaming: what resting and bounced-back particles kept, what
+    /// arriving particles brought (less what their sites held back), and what `c` held back from
+    /// the particles that left. Uses the distributions from before streaming (`scratch_f`).
+    fn carried(&self, c: usize) -> [f32; 4] {
+        let before = &self.scratch_f;
+        let here = self.flow_ink[c];
+        let mut kept = before[c][0];
+        let mut ink = [0.0f32; 4];
+        for i in 1..9 {
+            // Arriving along i, from the site behind.
+            let own = before[c][OPPOSITE[i]];
+            match self.neighbour(c, [-DIRECTIONS[i][0], -DIRECTIONS[i][1]]) {
+                None => kept += own,
+                Some(s) => {
+                    let k = ((self.block[c] + self.block[s]) / 2.0).min(1.0);
+                    kept += k * own;
+                    let share = (1.0 - k) * before[s][i] * (1.0 - self.held[s]);
+                    for (x, t) in ink.iter_mut().zip(self.flow_ink[s]) {
+                        *x += share * t;
+                    }
+                }
             }
-            let s = py as usize * self.width + px as usize;
-            if self.last_water[s] <= 0.0 || self.block[s].is_infinite() {
-                return self.flow_ink[c];
+            // Leaving along i, to the site ahead: the share held back stays here.
+            if let Some(d) = self.neighbour(c, DIRECTIONS[i]) {
+                let k = ((self.block[c] + self.block[d]) / 2.0).min(1.0);
+                kept += (1.0 - k) * before[c][i] * self.held[c];
             }
-            corners[k] = s;
         }
-        let at = |k: usize, ch: usize| self.flow_ink[corners[k]][ch];
-        std::array::from_fn(|ch| {
-            let top = lerp(at(0, ch), at(1, ch), fx);
-            let bottom = lerp(at(2, ch), at(3, ch), fx);
-            lerp(top, bottom, fy)
-        })
+        for (x, h) in ink.iter_mut().zip(here) {
+            *x += kept * h;
+        }
+        ink
     }
 }
 
@@ -563,8 +572,7 @@ mod tests {
         assert!(ink.is_dry(), "still wet after {steps} steps");
         assert!(ink.flow_ink.iter().all(|i| *i == [0.0; 4]));
         let after = ink.total_ink();
-        // Tracing the velocity back is not exactly conservative; it should be close.
-        assert!((after[0] - before[0]).abs() / before[0] < 0.1, "{before:?} → {after:?}");
+        assert!((after[0] - before[0]).abs() / before[0] < 1e-3, "{before:?} → {after:?}");
     }
 
     #[test]

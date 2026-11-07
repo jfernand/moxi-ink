@@ -38,18 +38,18 @@ impl Paper {
 
         // Grain: soft value noise in a few octaves, with long fibres laid over it.
         let mut grain = vec![0.0f32; n];
-        for (cell, amp) in [(48.0f32, 0.3f32), (20.0, 0.3), (9.0, 0.25), (4.0, 0.2), (2.0, 0.15)] {
+        for (cell, amp) in [(24.0f32, 0.15f32), (6.0, 0.15), (2.0, 0.2), (1.0, 0.2)] {
             let noise = ValueNoise::new(&mut rng, width, height, cell);
             for (c, g) in grain.iter_mut().enumerate() {
                 *g += amp * noise.at((c % width) as f32, (c / width) as f32);
             }
         }
-        let fibres = n / 6;
+        let fibres = n / 3;
         for _ in 0..fibres {
             let (x0, y0) = (rng.unit() * width as f32, rng.unit() * height as f32);
             let angle = rng.unit() * std::f32::consts::TAU;
-            let len = 4.0 + 14.0 * rng.unit();
-            let lift = 0.06 + 0.1 * rng.unit();
+            let len = 8.0 + 30.0 * rng.unit();
+            let lift = 0.15 + 0.25 * rng.unit();
             line(&mut grain, width, height, (x0, y0), angle, len, lift, true);
         }
         normalise(&mut grain);

@@ -62,22 +62,11 @@ impl Default for Trim {
 pub fn render_trimmed(ink: &Ink, palette: &Palette, trim: Trim) -> Vec<[f32; 3]> {
     let (w, h, s) = (ink.width, ink.height, trim.scale.max(1));
     let visible = ink.visible_ink();
-    // φ per site: the most water it held, shrunk to zero at the stain's own edge so the trimmed
-    // shape sits just inside the stained sites; negative where ink never reached.
-    let stained = |x: usize, y: usize| ink.stain[y * w + x] > 0.0;
-    let phi: Vec<f32> = (0..w * h)
-        .map(|c| {
-            let (x, y) = (c % w, c / w);
-            if !stained(x, y) {
-                return -0.2;
-            }
-            let at_edge = [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)].iter().any(|&(dx, dy)| {
-                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h && !stained(nx as usize, ny as usize)
-            });
-            if at_edge { 0.0 } else { ink.stain[c].min(1.0) }
-        })
-        .collect();
+    // φ per site: positive where ink has been, negative where it never reached, so the trimmed
+    // edge runs between the last stained site and the paper beyond it. Stained sites are kept
+    // whole, so a dark rim in the outermost ring survives the trimming.
+    let stained = |c: usize| ink.stain[c] > 0.0;
+    let phi: Vec<f32> = (0..w * h).map(|c| if stained(c) { 0.2 + 0.2 * ink.stain[c].min(1.0) } else { -0.2 }).collect();
     let sample = |field: &dyn Fn(usize) -> f32, x: f32, y: f32| {
         let (x, y) = ((x - 0.5).clamp(0.0, (w - 1) as f32), (y - 0.5).clamp(0.0, (h - 1) as f32));
         let (x0, y0) = (x.floor() as usize, y.floor() as usize);
@@ -94,11 +83,33 @@ pub fn render_trimmed(ink: &Ink, palette: &Palette, trim: Trim) -> Vec<[f32; 3]>
             let grain = sample(&|c| ink.paper.grain[c], x, y);
             let r = sample(&|c| ink.paper.rougher[c], x, y);
             let edge = sample(&|c| phi[c], x, y) + trim.roughness * (r + trim.bias);
-            let v = if edge < 0.0 { [0.0; 4] } else { std::array::from_fn(|k| sample(&|c| visible[c][k], x, y)) };
+            let v = if edge < 0.0 { [0.0; 4] } else { sample_stained(&visible, &|c| stained(c), w, h, x, y) };
             out.push(palette.colour(v, grain));
         }
     }
     out
+}
+
+/// Bilinear interpolation of `ink` at `(x, y)` (site units, centres at `+0.5`), over the stained
+/// corners only, so the paper beyond the edge does not pale the ink next to it.
+fn sample_stained(ink: &[[f32; 4]], stained: &dyn Fn(usize) -> bool, w: usize, h: usize, x: f32, y: f32) -> [f32; 4] {
+    let (x, y) = ((x - 0.5).clamp(0.0, (w - 1) as f32), (y - 0.5).clamp(0.0, (h - 1) as f32));
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let corners =
+        [(x0, y0, (1.0 - fx) * (1.0 - fy)), (x1, y0, fx * (1.0 - fy)), (x0, y1, (1.0 - fx) * fy), (x1, y1, fx * fy)];
+    let (mut sum, mut weight) = ([0.0f32; 4], 0.0f32);
+    for (cx, cy, wgt) in corners {
+        let c = cy * w + cx;
+        if stained(c) && wgt > 0.0 {
+            for (s, v) in sum.iter_mut().zip(ink[c]) {
+                *s += wgt * v;
+            }
+            weight += wgt;
+        }
+    }
+    if weight > 0.0 { sum.map(|s| s / weight) } else { [0.0; 4] }
 }
 
 /// Linear reflectance to an 8-bit sRGB channel.
